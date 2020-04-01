@@ -1,0 +1,47 @@
+[unix_http_server]
+file=/tmp/supervisor.sock   ; the path to the socket file
+
+[inet_http_server]         ; inet (TCP) server disabled by default
+port=0.0.0.0:9001        ; ip_address:port specifier, *:port for all iface
+
+[supervisord]
+logfile=/tmp/supervisord.log ; main log file; default $CWD/supervisord.log
+logfile_maxbytes=50MB        ; max main logfile bytes b4 rotation; default 50MB
+logfile_backups=10           ; # of main logfile backups; 0 means none, default 10
+loglevel=info                ; log level; default info; others: debug,warn,trace
+pidfile=/tmp/supervisord.pid ; supervisord pidfile; default supervisord.pid
+nodaemon=false               ; start in foreground if true; default false
+minfds=1024                  ; min. avail startup file descriptors; default 1024
+minprocs=200                 ; min. avail process descriptors;default 200
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+[supervisorctl]
+serverurl=unix:///tmp/supervisor.sock ; use a unix:// URL  for a unix socket
+
+{% if step >= 1 %}
+
+[program:n2n_prod_edge]
+user=root
+command=edge -a {{ vpn_prod_ips[ansible_hostname] }} -m {{ vpn_prod_macs[ansible_hostname] }} -M 1500 -c {{ vpn_name }}_prod -k {{ vpn_key }}_admin -l supernode.ntop.org:7777 -rEfA -d tap_prod -t 5644 -v -M 1500
+redirect_stderr=true
+autostart=false
+autorestart=true
+umask=0
+stderr_logfile=/tmp/n2n_prod_edge.err.log
+stdout_logfile=/tmp/n2n_prod_edge.out.log
+directory=/root
+
+[program:n2n_admin_edge]
+user=root
+command=edge -a {{ vpn_admin_ips[ansible_hostname] }} -m {{ vpn_admin_macs[ansible_hostname] }} -M 1500 -c {{ vpn_name }}_admin -k {{ vpn_key }}_prod -l supernode.ntop.org:7777 -rEfA -d tap_admin -t 5645 -v -M 1500
+redirect_stderr=true
+autostart=false
+autorestart=true
+umask=0
+stderr_logfile=/tmp/n2n_admin_edge.err.log
+stdout_logfile=/tmp/n2n_admin_edge.out.log
+directory=/root
+
+{% endif %}

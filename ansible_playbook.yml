@@ -1,0 +1,414 @@
+---
+- hosts: all
+  become: yes # This means that all tasks will be executed with sudo
+  tasks:
+    - name: Install Python 3.6
+      apt:
+        name: python3.6
+        state: present
+        update_cache: yes
+    - name: Install pip
+      apt:
+        name: python3-pip
+        state: present
+        update_cache: yes
+    - name: Install git
+      apt:
+        name: git
+        state: present
+        update_cache: yes
+    - name: Install autoconf
+      apt:
+        name: autoconf
+        state: present
+        update_cache: yes
+    - name: Install supervisord
+      command: pip3 install supervisor
+      args:
+        warn: no
+      become: true
+    - name: Prepare supervisord configuration
+      vars:
+        step: 0
+      template:
+        src: ansible/templates/supervisord.conf.jinja2
+        dest: /etc/supervisord.conf
+      become: true
+    - name: Check if port 9001 is listening
+      wait_for:
+        host: localhost
+        port: 9001
+#        delay: 1
+        timeout: 5
+        state: present
+        msg: "Timeout waiting for 9001 to respond"
+      register: supervisord_port_check
+      ignore_errors: yes
+    - name: Start supervisord
+      command: supervisord
+      args:
+        warn: no
+      become: true
+      when: supervisord_port_check.failed == true
+- hosts: controllers
+  become: yes
+  tasks:
+    - name: Install a nfs server
+      apt:
+        name: nfs-kernel-server
+        state: present
+        update_cache: yes
+    - name: Create a "/nfs/controller" directory
+      file:
+        path: /nfs/controller
+        state: directory
+    - name: Configure nfs export
+      blockinfile:
+        path: /etc/exports
+        block: |
+          # /etc/exports: the access control list for filesystems which may be exported
+          #		to NFS clients.  See exports(5).
+          /nfs/controller *(rw,sync,no_subtree_check,no_root_squash)
+    - name: Restart the nfs server
+      service:
+        name: nfs-kernel-server
+        state: restarted
+- hosts: computes
+  become: yes
+  tasks:
+    - name: Create a "/nfs/controller" directory
+      file:
+        path: /nfs/controller
+        state: directory
+    - name: Configure nfs export
+      blockinfile:
+        path: /etc/fstab
+        block: |
+          # /etc/exports: the access control list for filesystems which may be exported
+          #		to NFS clients.  See exports(5).
+          control1:/nfs/controller /nfs/controller nfs defaults,user,auto,noatime,bg 0 0
+    - name: mount all
+      command: mount -a
+      args:
+        warn: no
+      become: true
+- hosts: all
+  become: yes
+  tasks:
+    - name: Prepare build script for n2n (VPN)
+      template:
+        src: ansible/templates/compile_and_install_n2n.sh.jinja2
+        dest: /root/build_and_install_n2n.sh
+      become: true
+    - name: Install n2n (VPN)
+      command: bash /root/build_and_install_n2n.sh
+      args:
+        warn: no
+      become: true
+- hosts: all
+  become: yes
+  tasks:
+    - name: Prepare supervisord configuration
+      vars:
+        vpn_name: "vpn_distributed_os"
+        vpn_key: "vpn_distributed_os_key"
+        vpn_prod_ips:
+          control1: 10.0.0.1
+          compute1: 10.0.0.2
+        vpn_admin_ips:
+          control1: 10.1.0.1
+          compute1: 10.1.0.2
+        vpn_prod_macs:
+          control1: 1e:df:b3:3e:c8:04
+          compute1: 06:2f:52:6b:c4:37
+        vpn_admin_macs:
+          control1: 1e:df:b3:3e:c8:05
+          compute1: 06:2f:52:6b:c4:38
+        step: 1
+      template:
+        src: ansible/templates/supervisord.conf.jinja2
+        dest: /etc/supervisord.conf
+      become: true
+    - name: Reload supervisord
+      command: supervisorctl reread
+      args:
+        warn: no
+      become: true
+    - name: Update all services registered in supervisord
+      command: supervisorctl update all
+      args:
+        warn: no
+      become: true
+    - name: Reload all services registered in supervisord
+      command: supervisorctl restart all
+      args:
+        warn: no
+      become: true
+    - name: Reload n2n_prod_edge service
+      command: supervisorctl restart n2n_prod_edge
+      args:
+        warn: no
+      become: true
+    - name: Reload n2n_admin_edge service
+      command: supervisorctl restart n2n_admin_edge
+      args:
+        warn: no
+      become: true
+    - name: Generate an empty /etc/hosts file (kolla will fill it later)
+      vars:
+        vpn_name: "vpn_distributed_os"
+        vpn_key: "vpn_distributed_os_key"
+        vpn_prod_ips:
+          control1: 10.0.0.1
+          compute1: 10.0.0.2
+        vpn_admin_ips:
+          control1: 10.1.0.1
+          compute1: 10.1.0.2
+        step: 1
+      template:
+        src: ansible/templates/hosts.jinja2
+        dest: /etc/hosts
+      become: true
+#- hosts: all
+#  become: yes
+#  tasks:
+#    - name: Install microstack
+#      command: snap install microstack --classic --beta
+#      args:
+#        warn: no
+#      become: true
+#- hosts: controllers
+#  become: yes
+#  tasks:
+#    - name: Install microstack
+#      command: microstack.init --auto --cluster-password toto --control --debug
+#      args:
+#        warn: no
+#      become: true
+#- hosts: computes
+#  become: yes
+#  tasks:
+#    - name: Install microstack
+#      command: microstack.init -a --cluster-password toto --compute --debug
+#      args:
+#        warn: no
+#      become: true
+- hosts: controllers
+  become: yes
+  tasks:
+    - name: Install virtualenv
+      command: pip3 install virtualenv
+      args:
+        warn: no
+      become: true
+    - name: Check if virtualenv have been created
+      stat:
+        path: /root/virtualenv_kolla
+      register: venv_stat_result
+    - name: Create virtual env
+      command: virtualenv /root/virtualenv_kolla
+      args:
+        warn: no
+      become: true
+      when: venv_stat_result.stat.exists == False
+    - name: Install kolla-ansible
+      command: /root/virtualenv_kolla/bin/pip3 install ansible kolla-ansible
+      args:
+        warn: no
+      become: true
+    - name: Create /etc/kolla folder
+      command: mkdir -p /etc/kolla
+      args:
+        warn: no
+      become: true
+    - name: Create /etc/kolla/config folder
+      command: mkdir -p /etc/kolla/config
+      args:
+        warn: no
+      become: true
+    - name: Create /etc/kolla/config/nova folder
+      command: mkdir -p /etc/kolla/config/nova
+      args:
+        warn: no
+      become: true
+    - name: Prepare nova configuration file (/etc/kolla/config/nova.conf)
+      vars:
+        vpn_name: "vpn_distributed_os"
+        vpn_key: "vpn_distributed_os_key"
+        vpn_prod_ips:
+          control1: 10.0.0.1
+          compute1: 10.0.0.2
+        vpn_admin_ips:
+          control1: 10.1.0.1
+          compute1: 10.1.0.2
+        use_qemu: true
+        step: 1
+      template:
+        src: ansible/templates/config/nova/nova.conf.jinja2
+        dest: /etc/kolla/config/nova.conf
+      become: true
+    - name: Prepare nova configuration file (/etc/kolla/config/nova/nova-compute.conf)
+      vars:
+        vpn_name: "vpn_distributed_os"
+        vpn_key: "vpn_distributed_os_key"
+        vpn_prod_ips:
+          control1: 10.0.0.1
+          compute1: 10.0.0.2
+        vpn_admin_ips:
+          control1: 10.1.0.1
+          compute1: 10.1.0.2
+        use_qemu: true
+        step: 1
+      template:
+        src: ansible/templates/config/nova/nova.conf.jinja2
+        dest: /etc/kolla/config/nova/nova-compute.conf
+      become: true
+    - name: Change user of /etc/kolla
+      command: chown $USER:$USER /etc/kolla
+      args:
+        warn: no
+      become: true
+    - synchronize:
+        src: /root/virtualenv_kolla/share/kolla-ansible/etc_examples/kolla/
+        dest: /etc/kolla
+    - name: Prepare supervisord configuration
+      vars:
+        vpn_name: "vpn_distributed_os"
+        vpn_key: "vpn_distributed_os_key"
+        vpn_prod_ips:
+          control1: 10.0.0.1
+          compute1: 10.0.0.2
+        vpn_admin_ips:
+          control1: 10.1.0.1
+          compute1: 10.1.0.2
+        step: 1
+      template:
+        src: ansible/templates/ansible.cfg.jinja2
+        dest: /etc/ansible/ansible.cfg
+      become: true
+    - name: Prepare supervisord configuration
+      vars:
+        vpn_name: "vpn_distributed_os"
+        vpn_key: "vpn_distributed_os_key"
+        vpn_prod_ips:
+          control1: 10.0.0.1
+          compute1: 10.0.0.2
+        vpn_admin_ips:
+          control1: 10.1.0.1
+          compute1: 10.1.0.2
+        step: 1
+      template:
+        src: ansible/templates/multinode.jinja2
+        dest: /root/multinode
+      become: true
+    - name: Ping all nodes
+      command: ansible -i multinode all -m ping
+      args:
+        warn: no
+      become: true
+    - name: Check if passwords have been generated
+      stat:
+        path: /etc/kolla/passwords_have_been_generated
+      register: stat_result
+    - name: Generate passwords
+      shell:
+        cmd: |
+          source /root/virtualenv_kolla/bin/activate
+          kolla-genpwd
+      args:
+        executable: /bin/bash
+        warn: no
+      become: true
+      when: stat_result.stat.exists == False
+      register: password_result
+    - name: Remember that password have been generated
+      command: touch /etc/kolla/passwords_have_been_generated
+      args:
+        warn: no
+      become: true
+      when: stat_result.stat.exists == False
+    - name: Customize globals.yml
+      vars:
+        vpn_name: "vpn_distributed_os"
+        vpn_key: "vpn_distributed_os_key"
+        vpn_prod_ips:
+          control1: 10.0.0.1
+          compute1: 10.0.0.2
+        vpn_admin_ips:
+          control1: 10.1.0.1
+          compute1: 10.1.0.2
+        step: 1
+      template:
+        src: ansible/templates/globals.yml.jinja2
+        dest: /etc/kolla/globals.yml
+      become: true
+    - name: Run kolla-ansible (bootstrap-servers)
+      shell:
+        cmd: |
+          source /root/virtualenv_kolla/bin/activate
+          kolla-ansible -i /root/multinode bootstrap-servers > kolla_bootstrap_servers.log
+      args:
+        executable: /bin/bash
+        warn: no
+      become: true
+    - name: Run kolla-ansible (prechecks)
+      shell:
+        cmd: |
+          source /root/virtualenv_kolla/bin/activate
+          kolla-ansible -i /root/multinode prechecks > kolla_prechecks.log
+      args:
+        executable: /bin/bash
+        warn: no
+      become: true
+    - name: Run kolla-ansible (deploy)
+      shell:
+        cmd: |
+          source /root/virtualenv_kolla/bin/activate
+          kolla-ansible -i /root/multinode deploy > kolla_deploy.log
+      args:
+        executable: /bin/bash
+        warn: no
+      become: true
+    - name: Install 'openstack-client' python package
+      shell:
+        cmd: |
+          source /root/virtualenv_kolla/bin/activate
+          pip3 install python-openstackclient
+      args:
+        executable: /bin/bash
+        warn: no
+      become: true
+    - name: Generate credentials kolla-ansible (post-deploy)
+      shell:
+        cmd: |
+          source /root/virtualenv_kolla/bin/activate
+          kolla-ansible -i /root/multinode post-deploy > kolla_post_deploy.log
+      args:
+        executable: /bin/bash
+        warn: no
+      become: true
+    - name: Generate 'init_os.sh' script
+      vars:
+        vpn_name: "vpn_distributed_os"
+        vpn_key: "vpn_distributed_os_key"
+        vpn_prod_ips:
+          control1: 10.0.0.1
+          compute1: 10.0.0.2
+        vpn_admin_ips:
+          control1: 10.1.0.1
+          compute1: 10.1.0.2
+        step: 1
+      template:
+        src: ansible/templates/init_os.sh.jinja2
+        dest: /root/init_os.sh
+      become: true
+    - name: Init openstack cloud accounts, images, network, quotas
+      shell:
+        cmd: |
+          source /root/virtualenv_kolla/bin/activate
+          source /etc/kolla/admin-openrc.sh
+          bash /root/init_os.sh
+      args:
+        executable: /bin/bash
+        warn: no
+      become: true

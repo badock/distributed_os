@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+git clone https://github.com/ntop/n2n.git
+
+pushd n2n
+
+./autogen.sh
+./configure
+make
+
+# optionally install
+make install
+
+popd
+
+exit 0
